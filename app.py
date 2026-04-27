@@ -3,6 +3,7 @@ import os
 os.system("pip uninstall -y opencv-python")
 
 import streamlit as st
+import pandas as pd
 from ultralytics import YOLO
 from PIL import Image, ImageDraw
 import tempfile
@@ -10,8 +11,30 @@ import numpy as np
 
 
 # ==========================================
-# HELPER FUNCTIONS
+# SESSION STATE INITIALIZATION
 # ==========================================
+if "inventory" not in st.session_state:
+    st.session_state.inventory = []
+
+
+# ==========================================
+# HELPER FUNCTIONS & DATA
+# ==========================================
+
+# Exact 4-band color mappings for your 10 trained classes
+RESISTOR_COLORS = {
+    "10": [("Brown", "#8B4513"), ("Black", "#000000"), ("Black", "#000000"), ("Gold", "#FFD700")],
+    "220": [("Red", "#FF0000"), ("Red", "#FF0000"), ("Brown", "#8B4513"), ("Gold", "#FFD700")],
+    "330": [("Orange", "#FFA500"), ("Orange", "#FFA500"), ("Brown", "#8B4513"), ("Gold", "#FFD700")],
+    "1000": [("Brown", "#8B4513"), ("Black", "#000000"), ("Red", "#FF0000"), ("Gold", "#FFD700")],
+    "4700": [("Yellow", "#FFDF00"), ("Violet", "#8A2BE2"), ("Red", "#FF0000"), ("Gold", "#FFD700")],
+    "6800": [("Blue", "#0000FF"), ("Gray", "#808080"), ("Red", "#FF0000"), ("Gold", "#FFD700")],
+    "8200": [("Gray", "#808080"), ("Red", "#FF0000"), ("Red", "#FF0000"), ("Gold", "#FFD700")],
+    "9200": [("White", "#FFFFFF"), ("Red", "#FF0000"), ("Red", "#FF0000"), ("Gold", "#FFD700")],
+    "10000": [("Brown", "#8B4513"), ("Black", "#000000"), ("Orange", "#FFA500"), ("Gold", "#FFD700")],
+    "20000": [("Red", "#FF0000"), ("Black", "#000000"), ("Orange", "#FFA500"), ("Gold", "#FFD700")],
+}
+
 
 def format_resistance(value):
     try:
@@ -21,6 +44,19 @@ def format_resistance(value):
         return f"{val} Ω"
     except ValueError:
         return f"{value} Ω"
+
+
+def render_color_code(class_name):
+    if class_name in RESISTOR_COLORS:
+        bands = RESISTOR_COLORS[class_name]
+        html = "<div style='display: flex; gap: 6px; margin-top: 5px; margin-bottom: 15px;'>"
+        for name, hex_code in bands:
+            text_color = "white" if name in ["Black", "Brown", "Blue", "Violet"] else "black"
+            border = "1px solid #ccc" if name == "White" else "none"
+            html += f"<div style='background-color: {hex_code}; color: {text_color}; padding: 4px 10px; border-radius: 4px; border: {border}; font-size: 14px; font-weight: 600;'>{name}</div>"
+        html += "</div>"
+        return html
+    return ""
 
 
 def analyze_image_quality(image):
@@ -63,10 +99,9 @@ def add_capture_guide(image):
     right = left + box_w
     bottom = top + box_h
 
-    # Draw a stylized dashed-looking or distinct guide box
     draw.rectangle(
         [left, top, right, bottom],
-        outline="#FF4B4B", # Streamlit's primary red color
+        outline="#FF4B4B", 
         width=5
     )
 
@@ -88,7 +123,7 @@ st.set_page_config(
 # SIDEBAR CONFIGURATION
 # ==========================================
 
-st.sidebar.title("⚙️ Model Settings")
+st.sidebar.title("⚙️ Navigation")
 
 model_choice = st.sidebar.radio(
     "Select AI Logic:",
@@ -97,14 +132,30 @@ model_choice = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 
-st.sidebar.markdown("### 📝 Model Notes")
-st.sidebar.info(
-    "**Specialist:** Limited to the list below, but highly robust. Can detect values even in tough conditions "
-    "(blur, angles, poor lighting).\n\n"
-    "**Generalist:** Not limited to a list. Reads the exact color bands, but requires good image conditions "
-    "to distinguish colors accurately.\n\n"
-    "**Smart Logic:** Combines both for the absolute best outcome."
-)
+# Inventory Tracker UI
+st.sidebar.markdown("### 📦 Session Inventory")
+if st.session_state.inventory:
+    # Convert session state list to pandas DataFrame for clean display
+    df_inventory = pd.DataFrame(st.session_state.inventory)
+    
+    # Display table
+    st.sidebar.dataframe(df_inventory, hide_index=True, use_container_width=True)
+    
+    # CSV Download Button
+    csv = df_inventory.to_csv(index=False).encode('utf-8')
+    st.sidebar.download_button(
+        label="📥 Download CSV",
+        data=csv,
+        file_name='resistor_inventory.csv',
+        mime='text/csv',
+    )
+    
+    # Clear Inventory Button
+    if st.sidebar.button("🗑️ Clear Inventory"):
+        st.session_state.inventory = []
+        st.rerun()
+else:
+    st.sidebar.info("Inventory is empty. Scan components and save them to build your list.")
 
 st.sidebar.markdown("---")
 
@@ -123,7 +174,7 @@ if model_choice == "Specialist Model":
     st.title("⚡ Specialist Model: Common Resistor Detection")
     st.write(
         "Upload or capture a resistor image. The YOLO Specialist model will detect "
-        "the resistor and classify its common resistance value."
+        "the resistor, classify its value, and break down its color code."
     )
 
     MODEL_PATH = "my_SP_1_Model.pt"
@@ -156,7 +207,6 @@ if model_choice == "Specialist Model":
     if image_file is not None:
         image = Image.open(image_file).convert("RGB")
         
-        # Display the main input image cleanly
         st.markdown("### Analysis")
         
         # --- IMAGE DIAGNOSTICS SECTION ---
@@ -173,7 +223,6 @@ if model_choice == "Specialist Model":
             with diag_col2:
                 st.markdown("#### Quality Metrics")
                 
-                # Use st.metric for a dashboard look
                 met_col1, met_col2 = st.columns(2)
                 met_col1.metric("Brightness", f"{brightness:.0f} / 255")
                 met_col2.metric("Sharpness", f"{blur_score:.0f}")
@@ -208,18 +257,39 @@ if model_choice == "Specialist Model":
             
         with res_col2:
             st.subheader("Detected Values")
+            
             if len(result.boxes) == 0:
                 st.error("No resistor detected.")
                 st.info("Try adjusting the confidence threshold or taking a clearer picture.")
             else:
+                detected_items = [] # Temporary list to hold current predictions
+                
                 for box in result.boxes:
                     class_id = int(box.cls[0])
                     class_name = model.names[class_id]
                     conf_score = float(box.conf[0])
+                    formatted_val = format_resistance(class_name)
 
-                    st.success(f"**{format_resistance(class_name)}**")
-                    st.caption(f"Raw Model Class: {class_name}")
+                    # Display Prediction
+                    st.success(f"**{formatted_val}**")
                     st.progress(conf_score, text=f"Confidence: {conf_score*100:.1f}%")
+                    
+                    # Display Educational Color Code Breakdown
+                    st.caption(f"Standard 4-Band Color Code for {formatted_val}:")
+                    st.markdown(render_color_code(class_name), unsafe_allow_html=True)
+                    
+                    # Add to temporary array in case user wants to save
+                    detected_items.append({
+                        "Value": formatted_val,
+                        "Confidence": f"{conf_score*100:.1f}%"
+                    })
+                
+                # Inventory Saving Action
+                st.markdown("---")
+                if st.button("💾 Save to Inventory"):
+                    for item in detected_items:
+                        st.session_state.inventory.append(item)
+                    st.success(f"Successfully added {len(detected_items)} item(s) to your session inventory!")
 
         os.remove(temp_path)
 
