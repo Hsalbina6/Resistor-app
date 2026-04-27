@@ -30,19 +30,23 @@ def analyze_image_quality(image):
     blur_score = np.var(img_gray)
 
     feedback = []
+    status = "good"
 
     if brightness < 70:
         feedback.append("Image may be too dark. Try better lighting.")
+        status = "warning"
     elif brightness > 210:
         feedback.append("Image may be too bright. Reduce glare or strong light.")
+        status = "warning"
 
     if blur_score < 500:
         feedback.append("Image may be blurry. Try holding the camera steady.")
+        status = "warning"
 
     if not feedback:
         feedback.append("Image quality looks acceptable.")
 
-    return brightness, blur_score, feedback
+    return brightness, blur_score, feedback, status
 
 
 def add_capture_guide(image):
@@ -59,10 +63,11 @@ def add_capture_guide(image):
     right = left + box_w
     bottom = top + box_h
 
+    # Draw a stylized dashed-looking or distinct guide box
     draw.rectangle(
         [left, top, right, bottom],
-        outline="red",
-        width=6
+        outline="#FF4B4B", # Streamlit's primary red color
+        width=5
     )
 
     return guided_image
@@ -134,7 +139,8 @@ if model_choice == "Specialist Model":
 
     option = st.radio(
         "Choose input method:",
-        ["Upload Image", "Use Camera"]
+        ["Upload Image", "Use Camera"],
+        horizontal=True
     )
 
     image_file = None
@@ -149,60 +155,71 @@ if model_choice == "Specialist Model":
 
     if image_file is not None:
         image = Image.open(image_file).convert("RGB")
+        
+        # Display the main input image cleanly
+        st.markdown("### Analysis")
+        
+        # --- IMAGE DIAGNOSTICS SECTION ---
+        with st.expander("🔍 View Image Quality Diagnostics", expanded=False):
+            brightness, blur_score, feedback, status = analyze_image_quality(image)
+            
+            diag_col1, diag_col2 = st.columns([1, 1])
+            
+            with diag_col1:
+                st.markdown("#### Capture Guide")
+                guided_image = add_capture_guide(image)
+                st.image(guided_image, caption="Ideal framing area", use_container_width=True)
+                
+            with diag_col2:
+                st.markdown("#### Quality Metrics")
+                
+                # Use st.metric for a dashboard look
+                met_col1, met_col2 = st.columns(2)
+                met_col1.metric("Brightness", f"{brightness:.0f} / 255")
+                met_col2.metric("Sharpness", f"{blur_score:.0f}")
+                
+                st.markdown("#### Feedback")
+                for message in feedback:
+                    if message == "Image quality looks acceptable.":
+                        st.success(message)
+                    else:
+                        st.warning(message)
 
-        guide_col, quality_col = st.columns([1.2, 1])
-
-        with guide_col:
-            st.subheader("Capture Guide")
-            guided_image = add_capture_guide(image)
-            st.image(
-                guided_image,
-                caption="Place the resistor inside the red guide box for best results.",
-                width=450
-            )
-
-        with quality_col:
-            st.subheader("Image Quality Feedback")
-            brightness, blur_score, feedback = analyze_image_quality(image)
-
-            st.write(f"**Brightness Score:** {brightness:.1f}")
-            st.write(f"**Blur Score:** {blur_score:.1f}")
-
-            for message in feedback:
-                if message == "Image quality looks acceptable.":
-                    st.success(message)
-                else:
-                    st.warning(message)
-
+        # --- YOLO PREDICTION SECTION ---
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
             image.save(temp_file.name)
             temp_path = temp_file.name
 
-        results = model.predict(
-            source=temp_path,
-            conf=confidence,
-            save=False
-        )
+        with st.spinner("Analyzing image..."):
+            results = model.predict(
+                source=temp_path,
+                conf=confidence,
+                save=False
+            )
 
         result = results[0]
         plotted_image = result.plot()[..., ::-1]
 
-        st.subheader("Prediction Result")
-        st.image(plotted_image, caption="Detected Resistor Value", use_container_width=True)
+        # Final Result Display
+        res_col1, res_col2 = st.columns([1.5, 1])
+        
+        with res_col1:
+            st.image(plotted_image, caption="AI Detection Result", use_container_width=True)
+            
+        with res_col2:
+            st.subheader("Detected Values")
+            if len(result.boxes) == 0:
+                st.error("No resistor detected.")
+                st.info("Try adjusting the confidence threshold or taking a clearer picture.")
+            else:
+                for box in result.boxes:
+                    class_id = int(box.cls[0])
+                    class_name = model.names[class_id]
+                    conf_score = float(box.conf[0])
 
-        st.subheader("Detected Classes")
-
-        if len(result.boxes) == 0:
-            st.warning("No resistor value detected. Try a clearer image or lower the confidence threshold.")
-        else:
-            for box in result.boxes:
-                class_id = int(box.cls[0])
-                class_name = model.names[class_id]
-                conf_score = float(box.conf[0])
-
-                st.success(f"Predicted Value: **{format_resistance(class_name)}**")
-                st.write(f"Raw Model Class: {class_name}")
-                st.write(f"Confidence: {conf_score:.2f}")
+                    st.success(f"**{format_resistance(class_name)}**")
+                    st.caption(f"Raw Model Class: {class_name}")
+                    st.progress(conf_score, text=f"Confidence: {conf_score*100:.1f}%")
 
         os.remove(temp_path)
 
@@ -215,7 +232,7 @@ if model_choice == "Specialist Model":
 # ==========================================
 
 elif model_choice == "Generalist Model (Coming Soon)":
-    st.title("🧠 Generalist Model (Color Band Reader)")
+    st.title("📊 Generalist Model (Color Band Reader)")
     st.write(
         "This model processes cropped resistors to explicitly read and decode their color bands. "
         "Unlike the Specialist model, it is not limited to a pre-defined list of values and can decode any standard resistor. "
@@ -256,14 +273,11 @@ elif model_choice == "Smart Logic (Coming Soon)":
     st.markdown("""
     ### Decision Logic
 
-    ✅ **If both models agree:**  
-    Display the value with **High Confidence**.
+    ✅ **If both models agree:** Display the value with **High Confidence**.
 
-    ⚠️ **If they disagree but the value exists in the Specialist list:**  
-    Display the Specialist result with **Medium Confidence**.
+    ⚠️ **If they disagree but the value exists in the Specialist list:** Display the Specialist result with **Medium Confidence**.
 
-    ❌ **If the value does not exist in the Specialist list:**  
-    Use the Generalist result with **Low Confidence**.
+    ❌ **If the value does not exist in the Specialist list:** Use the Generalist result with **Low Confidence**.
     """)
 
     st.warning("🚧 This logic pipeline is currently under development. Check back soon!")
