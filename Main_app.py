@@ -1,7 +1,11 @@
+import os
+os.system("pip uninstall -y opencv-python")
+
 import streamlit as st
 from ultralytics import YOLO
 from PIL import Image
 import numpy as np
+
 
 # 1. Set up the page layout and title
 st.set_page_config(page_title="Resistor Value Detector", layout="centered")
