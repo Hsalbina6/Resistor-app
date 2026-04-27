@@ -149,7 +149,7 @@ if model_choice == "Specialist Model":
         "the resistor and classify its value."
     )
 
-    MODEL_PATH = "my_SP_1_Model.pt"
+    MODEL_PATH = "my_SP_1.pt" # UPDATED MODEL FILE NAME HERE
 
     @st.cache_resource
     def load_model():
